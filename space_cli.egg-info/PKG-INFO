@@ -1,3 +1,22 @@
+Metadata-Version: 2.4
+Name: space-cli
+Version: 1.1.0
+Summary: A macOS disk space analysis CLI: health, index, app usage, big files.
+Author-email: Your Name <you@example.com>
+License: MIT
+Project-URL: Homepage, https://github.com/kennyz/space-cli
+Project-URL: Issues, https://github.com/kennyz/space-cli/issues
+Keywords: disk,space,cleanup,macos,cli
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: MacOS
+Classifier: Environment :: Console
+Classifier: Topic :: System :: Filesystems
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Provides-Extra: mcp
+Requires-Dist: mcp<2,>=1; extra == "mcp"
+
 # space-cli - Mac OS 磁盘空间分析工具
 
 很多人的Mac电脑都会出现磁盘空间不够用，付费软件太贵或者难以使用。
@@ -22,22 +41,7 @@ space-cli是一个开源的Mac OS命令行小工具，用于分析磁盘空间�
 
 ## 安装
 
-### 方法1：通过 pip 安装（推荐）
-
-```bash
-python3 -m pip install --upgrade myspace-cli
-
-# 支持Pip安装
-pip install myspace-cli
-
-# 安装完成后直接使用
-space-cli --help
-
-# 或以模块方式
-python3 -m space_cli --help
-```
-
-### 方法2：直接使用
+### 方法1：直接使用（推荐）
 
 ```bash
 # 克隆或下载项目
@@ -51,7 +55,7 @@ chmod +x space_cli.py
 python3 space_cli.py
 ```
 
-### 方法3：创建全局命令
+### 方法2：创建全局命令
 
 ```bash
 # 复制到系统路径
@@ -62,7 +66,17 @@ sudo chmod +x /usr/local/bin/space-cli
 space-cli
 ```
 
-注：若你更倾向于使用 PyPI 包名 `spacecli`，也可执行 `python3 -m pip install --upgrade spacecli`，命令入口同为 `space-cli`。
+### 方法3：通过 pip 安装（发布到 PyPI 后）
+
+```bash
+python3 -m pip install --upgrade spacecli
+
+# 直接使用命令
+space-cli --help
+
+# 或者作为模块调用
+python3 -m space_cli --help
+```
 
 ## 使用方法
 

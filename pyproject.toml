@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "myspace-cli"
+version = "1.2.0"
+description = "A macOS disk space analysis CLI: health, index, app usage, big files."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Your Name", email = "you@example.com" }]
+keywords = ["disk", "space", "cleanup", "macos", "cli"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Environment :: Console",
+  "Topic :: System :: Filesystems",
+]
+
+[project.urls]
+Homepage = "https://github.com/kennyz/space-cli"
+Issues = "https://github.com/kennyz/space-cli/issues"
+
+[project.scripts]
+space-cli = "space_cli:main"
+
+[tool.setuptools]
+py-modules = ["space_cli"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1,<2"]
+

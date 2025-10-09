@@ -1,0 +1,2 @@
+[console_scripts]
+space-cli = space_cli:main

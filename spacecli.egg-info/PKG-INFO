@@ -1,10 +1,27 @@
+Metadata-Version: 2.4
+Name: spacecli
+Version: 1.1.0
+Summary: A macOS disk space analysis CLI: health, index, app usage, big files.
+Author-email: Your Name <you@example.com>
+License: MIT
+Project-URL: Homepage, https://github.com/kennyz/space-cli
+Project-URL: Issues, https://github.com/kennyz/space-cli/issues
+Keywords: disk,space,cleanup,macos,cli
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: MacOS
+Classifier: Environment :: Console
+Classifier: Topic :: System :: Filesystems
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Provides-Extra: mcp
+Requires-Dist: mcp<2,>=1; extra == "mcp"
+
 # space-cli - Mac OS 磁盘空间分析工具
 
 很多人的Mac电脑都会出现磁盘空间不够用，付费软件太贵或者难以使用。
-
-space-cli是一个开源的Mac OS命令行小工具，用于分析磁盘空间健康度并找出占用空间最大的目录。
-
-本软件采用**最严安全原则**，所有操作采用只读模式，不会尝试改写和破坏用户电脑的任何数据，也不会上传任何数据到外网，严格保护用户的隐私。
+space-cli是一个开源的Mac OS命令行工具，用于分析磁盘空间健康度并找出占用空间最大的目录。
+本软件采用最严安全原则，采用只读模式，不会破坏用户电脑的任何数据，也不会上传任何数据到外网，严格隐私保护。
 
 ## 功能特性
 
@@ -16,28 +33,14 @@ space-cli是一个开源的Mac OS命令行小工具，用于分析磁盘空间�
 - 🎯 **灵活配置** - 支持自定义分析路径和显示数量
 - 🗂️ **索引缓存** - 目录大小结果本地索引缓存（`~/.spacecli/index.json`），支持TTL与重建提示
 - 🧩 **应用分析** - 汇总 `Applications`、`Library`、`Caches`、`Logs` 等路径估算应用占用，给出卸载建议
+ - 🧠 **应用分析缓存** - 应用聚合缓存存放于 `~/.cache/spacecli/apps.json`
  - 🏠 **用户目录深度分析** - 针对 `~/Library`、`~/Downloads`、`~/Documents` 分别下探并展示Top N目录
  - 🗄️ **大文件分析** - 扫描并列出指定路径下最大的文件，支持数量和最小体积阈值
- - ⏱️ **支持MCP调用** - 支持你自己的AI Agent无缝调用磁盘空间信息
+ - ⏱️ **单行进度显示** - 分析时在一行滚动显示当前读取目录与计数
 
 ## 安装
 
-### 方法1：通过 pip 安装（推荐）
-
-```bash
-python3 -m pip install --upgrade myspace-cli
-
-# 支持Pip安装
-pip install myspace-cli
-
-# 安装完成后直接使用
-space-cli --help
-
-# 或以模块方式
-python3 -m space_cli --help
-```
-
-### 方法2：直接使用
+### 方法1：直接使用（推荐）
 
 ```bash
 # 克隆或下载项目
@@ -51,7 +54,7 @@ chmod +x space_cli.py
 python3 space_cli.py
 ```
 
-### 方法3：创建全局命令
+### 方法2：创建全局命令
 
 ```bash
 # 复制到系统路径
@@ -62,7 +65,17 @@ sudo chmod +x /usr/local/bin/space-cli
 space-cli
 ```
 
-注：若你更倾向于使用 PyPI 包名 `spacecli`，也可执行 `python3 -m pip install --upgrade spacecli`，命令入口同为 `space-cli`。
+### 方法3：通过 pip 安装（发布到 PyPI 后）
+
+```bash
+python3 -m pip install --upgrade spacecli
+
+# 直接使用命令
+space-cli --help
+
+# 或者作为模块调用
+python3 -m space_cli --help
+```
 
 ## 使用方法
 

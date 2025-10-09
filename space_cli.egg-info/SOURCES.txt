@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+space_cli.py
+space_cli.egg-info/PKG-INFO
+space_cli.egg-info/SOURCES.txt
+space_cli.egg-info/dependency_links.txt
+space_cli.egg-info/entry_points.txt
+space_cli.egg-info/requires.txt
+space_cli.egg-info/top_level.txt
