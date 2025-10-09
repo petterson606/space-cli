@@ -1,6 +1,8 @@
-# SpaceCli - Mac OS 磁盘空间分析工具
+# space-cli - Mac OS 磁盘空间分析工具
 
-一个强大的Mac OS命令行工具，用于分析磁盘空间健康度并找出占用空间最大的目录。
+很多人的Mac电脑都会出现磁盘空间不够用，付费软件太贵或者难以使用。
+space-cli是一个开源的Mac OS命令行工具，用于分析磁盘空间健康度并找出占用空间最大的目录。
+本软件采用最严安全原则，采用只读模式，不会破坏用户电脑的任何数据，也不会上传任何数据到外网，严格隐私保护。
 
 ## 功能特性
 
@@ -10,6 +12,12 @@
 - 📄 **报告导出** - 将分析结果导出为JSON格式报告
 - ⚡ **高性能** - 优化的算法，快速分析大型文件系统
 - 🎯 **灵活配置** - 支持自定义分析路径和显示数量
+ - 🗂️ **索引缓存** - 目录大小结果本地索引缓存（`~/.spacecli/index.json`），支持TTL与重建提示
+ - 🧩 **应用分析** - 汇总 `Applications`、`Library`、`Caches`、`Logs` 等路径估算应用占用，给出卸载建议
+ - 🧠 **应用分析缓存** - 应用聚合缓存存放于 `~/.cache/spacecli/apps.json`
+ - 🏠 **用户目录深度分析** - 针对 `~/Library`、`~/Downloads`、`~/Documents` 分别下探并展示Top N目录
+ - 🗄️ **大文件分析** - 扫描并列出指定路径下最大的文件，支持数量和最小体积阈值
+ - ⏱️ **单行进度显示** - 分析时在一行滚动显示当前读取目录与计数
 
 ## 安装
 
@@ -17,7 +25,7 @@
 
 ```bash
 # 克隆或下载项目
-git clone <repository-url>
+git clone https://github.com/kennyz/space-cli
 cd MacDiskSpace
 
 # 给脚本添加执行权限
@@ -51,6 +59,9 @@ python3 space_cli.py -p /Users/username
 
 # 显示前10个最大的目录
 python3 space_cli.py -n 10
+
+# 快捷分析当前用户目录（含用户目录深度分析）
+python3 space_cli.py --home
 ```
 
 ### 高级用法
@@ -67,6 +78,49 @@ python3 space_cli.py --export disk_report.json
 
 # 分析用户目录并导出报告
 python3 space_cli.py -p /Users -n 15 --export user_analysis.json
+
+# 使用索引缓存（默认开启）
+python3 space_cli.py --use-index
+
+# 强制重建索引
+python3 space_cli.py --reindex
+
+# 设置索引缓存有效期为 6 小时
+python3 space_cli.py --index-ttl 6
+
+# 非交互，不提示使用缓存
+python3 space_cli.py --no-prompt
+
+# 分析应用目录占用并给出卸载建议（按应用归并）
+python3 space_cli.py --apps -n 20
+
+# 大文件分析（显示前20个，阈值2G）
+python3 space_cli.py --big-files --big-files-top 20 --big-files-min 2G
+
+# 将含大文件分析的结果写入导出报告
+python3 space_cli.py --big-files --export report.json
+
+## MCP Server（可选）
+
+本项目提供 MCP Server，方便在支持 MCP 的客户端中以“工具”的形式调用：
+
+### 安装依赖
+```bash
+python3 -m pip install mcp
+```
+
+### 启动服务
+```bash
+python3 mcp_server.py
+```
+
+### 暴露的工具
+- `disk_health(path="/")`
+- `largest_directories(path="/", top_n=20, use_index=True, reindex=False, index_ttl=24)`
+- `app_analysis(top_n=20, use_index=True, reindex=False, index_ttl=24)`
+- `big_files(path="/", top_n=20, min_size="0")`
+
+以上工具与 CLI 输出保持一致的逻辑（索引缓存、阈值等），适合与 IDE/Agent 集成。
 ```
 
 ### 命令行参数
@@ -78,6 +132,16 @@ python3 space_cli.py -p /Users -n 15 --export user_analysis.json
 | `--health-only` | 只显示磁盘健康状态 | - |
 | `--directories-only` | 只显示目录分析 | - |
 | `--export FILE` | 导出报告到JSON文件 | - |
+| `--use-index` | 使用索引缓存（默认） | - |
+| `--no-index` | 禁用索引缓存 | - |
+| `--reindex` | 强制重建索引 | - |
+| `--index-ttl` | 索引缓存有效期（小时） | `24` |
+| `--no-prompt` | 非交互模式，不提示使用缓存 | - |
+| `--apps` | 分析应用目录空间与卸载建议 | - |
+| `--home` | 将分析路径设置为当前用户目录 | - |
+| `--big-files` | 启用大文件分析 | - |
+| `--big-files-top` | 大文件列表数量 | `20` |
+| `--big-files-min` | 大文件最小阈值（K/M/G/T） | `0` |
 | `--version` | 显示版本信息 | - |
 | `-h, --help` | 显示帮助信息 | - |
 
@@ -114,6 +178,21 @@ python3 space_cli.py -p /Users -n 15 --export user_analysis.json
     大小: 6.8 GB (1.36%)
 ```
 
+### 大文件分析
+```
+============================================================
+🗄️ 大文件分析
+============================================================
+ 1. /Users/username/Downloads/big.iso  --  大小: 7.2 GB (1.44%)
+ 2. /Users/username/Movies/clip.mov   --  大小: 3.1 GB (0.62%)
+```
+
+### 单行进度显示
+分析过程中会在一行滚动显示当前读取目录与扫描计数，例如：
+```
+-> 正在读取: /Users/username/Library/Caches/...    已扫描文件数: 3500
+```
+
 ## 健康状态说明
 
 - ✅ **良好** - 磁盘使用率 < 80%
@@ -126,6 +205,7 @@ python3 space_cli.py -p /Users -n 15 --export user_analysis.json
 - 跳过无法访问的系统文件和隐藏文件
 - 支持中断操作（Ctrl+C）
 - 内存优化的文件遍历
+ - 单行滚动进度避免输出刷屏
 
 ## 故障排除
 
@@ -144,6 +224,8 @@ python3 space_cli.py -p /Users/$(whoami)
 - 使用 `--directories-only` 跳过健康检查
 - 减少 `-n` 参数值
 - 分析特定子目录而不是根目录
+ - 使用 `--big-files-min` 提高阈值可减少扫描文件数量
+ - 使用 `--use-index`/`--reindex`/`--index-ttl` 控制索引的使用与刷新
 
 ## 系统要求
 
@@ -167,3 +249,11 @@ MIT License
 - 目录大小分析功能
 - JSON报告导出
 - 命令行参数支持
+
+### v1.1.0
+- 新增交互式菜单（无参数时出现），默认执行全部项目
+- 新增 `--home` 用户目录快速分析与用户目录深度分析
+- 新增应用分析缓存（`~/.cache/spacecli/apps.json`）
+- 新增大文件分析 `--big-files`/`--big-files-top`/`--big-files-min`
+- 导出报告在启用大文件分析时包含 `largest_files`
+- 单行滚动进度显示
