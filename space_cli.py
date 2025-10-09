@@ -311,6 +311,22 @@ class SpaceCli:
         os.makedirs(app_cache_dir, exist_ok=True)
         self.app_index = IndexStore(index_file=os.path.join(app_cache_dir, "apps.json"))
 
+    # 通用渲染：目录与应用（减少重复）
+    def _render_dirs(self, entries: List[Tuple[str, int]], total_bytes: int) -> None:
+        for i, (dir_path, size) in enumerate(entries, 1):
+            size_str = self.analyzer.format_bytes(size)
+            percentage = (size / total_bytes) * 100 if total_bytes else 0
+            color = "\033[31m" if size >= 1024**3 else "\033[32m"
+            print(f"{i:2d}. \033[36m{dir_path}\033[0m --    大小: {color}{size_str}\033[0m (\033[33m{percentage:.2f}%\033[0m)")
+
+    def _render_apps(self, entries: List[Tuple[str, int]], disk_total: int) -> None:
+        for i, (app, size) in enumerate(entries, 1):
+            size_str = self.analyzer.format_bytes(size)
+            pct = (size / disk_total) * 100 if disk_total else 0
+            suggestion = "建议卸载或清理缓存" if size >= 5 * 1024**3 else "可保留，定期清理缓存"
+            color = "\033[31m" if size >= 5 * 1024**3 else "\033[32m"
+            print(f"{i:2d}. \033[36m{app}\033[0m  --  占用: {color}{size_str}\033[0m ({pct:.2f}%)  — {suggestion}")
+
     def analyze_app_directories(self, top_n: int = 20,
                                 index: IndexStore = None,
                                 use_index: bool = True,
@@ -424,32 +440,42 @@ class SpaceCli:
         print("=" * 60)
         print("📊 占用空间最大的目录")
         print("=" * 60)
-        
+
+        # 若有缓存：直接显示缓存，然后再询问是否重新分析
+        if self.args.use_index:
+            cached = self.index.get(path)
+            if cached and cached.get("entries"):
+                cached_entries = [(e["path"], int(e["size"])) for e in cached["entries"]][:top_n]
+                total_info = self.analyzer.get_disk_usage(path)
+                total_bytes = total_info['total'] if total_info else 1
+                print(f"(来自索引) 显示前 {min(len(cached_entries), top_n)} 个最大的目录:\n")
+                self._render_dirs(cached_entries, total_bytes)
+                if sys.stdin.isatty() and not self.args.no_prompt:
+                    try:
+                        ans = input("是否重新分析以刷新索引？[y/N]: ").strip().lower()
+                    except EOFError:
+                        ans = ""
+                    if ans not in ("y", "yes"):
+                        return
+                else:
+                    return
+
         directories = self.analyzer.analyze_largest_directories(
             path,
             top_n=top_n,
             index=self.index,
             use_index=self.args.use_index,
-            reindex=self.args.reindex,
+            reindex=True,  # 走到这里表示要刷新
             index_ttl_hours=self.args.index_ttl,
-            prompt=not self.args.no_prompt,
+            prompt=False,
         )
-        
         if not directories:
             print("❌ 无法分析目录大小")
             return
-        
-        print(f"显示前 {min(len(directories), top_n)} 个最大的目录:\n")
-        
-        for i, (dir_path, size) in enumerate(directories, 1):
-            size_str = self.analyzer.format_bytes(size)
-            percentage = (size / self.analyzer.get_disk_usage(path)['total']) * 100 if self.analyzer.get_disk_usage(path) else 0
-            # 目录大小大于1G采用红色显示
-            color = "\033[31m" if size >= 1024**3 else "\033[32m"
-            print(f"{i:2d}. \033[36m{dir_path}\033[0m --    大小: {color}{size_str}\033[0m (\033[33m{percentage:.2f}%\033[0m)")
-            ##print(f"{i:2d}. {dir_path}")
-            ##print(f"    大小: {size_str} ({percentage:.2f}%)")
-            ##print()
+        total_info = self.analyzer.get_disk_usage(path)
+        total_bytes = total_info['total'] if total_info else 1
+        print("\n已重新分析，最新结果：\n")
+        self._render_dirs(directories, total_bytes)
 
     def print_app_analysis(self, top_n: int = 20):
         """打印应用目录占用分析，并给出卸载建议"""
@@ -457,29 +483,40 @@ class SpaceCli:
         print("🧩 应用目录空间分析与卸载建议")
         print("=" * 60)
 
+        # 先显示缓存，再决定是否刷新
+        if self.args.use_index:
+            cached = self.app_index.get_named("apps_aggregate")
+            if cached and cached.get("entries"):
+                cached_entries = [(e["name"], int(e["size"])) for e in cached["entries"]][:top_n]
+                total = self.analyzer.get_disk_usage("/")
+                disk_total = total['total'] if total else 1
+                print(f"(来自索引) 显示前 {min(len(cached_entries), top_n)} 个空间占用最高的应用:\n")
+                self._render_apps(cached_entries, disk_total)
+                if sys.stdin.isatty() and not self.args.no_prompt:
+                    try:
+                        ans = input("是否重新分析应用以刷新索引？[y/N]: ").strip().lower()
+                    except EOFError:
+                        ans = ""
+                    if ans not in ("y", "yes"):
+                        return
+                else:
+                    return
+
         apps = self.analyze_app_directories(
             top_n=top_n,
             index=self.app_index,
             use_index=self.args.use_index,
-            reindex=self.args.reindex,
+            reindex=True,
             index_ttl_hours=self.args.index_ttl,
-            prompt=not self.args.no_prompt,
+            prompt=False,
         )
         if not apps:
             print("❌ 未发现可分析的应用目录")
             return
-
         total = self.analyzer.get_disk_usage("/")
         disk_total = total['total'] if total else 1
-
-        print(f"显示前 {min(len(apps), top_n)} 个空间占用最高的应用:\n")
-        for i, (app, size) in enumerate(apps, 1):
-            size_str = self.analyzer.format_bytes(size)
-            pct = (size / disk_total) * 100
-            suggestion = "建议卸载或清理缓存" if size >= 5 * 1024**3 else "可保留，定期清理缓存"
-            print(f"{i:2d}. \033[36m{app}\033[0m  --  占用: {size_str} ({pct:.2f}%)  — {suggestion}")
-            ##print(f"    占用: {size_str} ({pct:.2f}%)  — {suggestion}")
-            #print()
+        print("\n已重新分析，最新应用占用结果：\n")
+        self._render_apps(apps, disk_total)
 
     def print_home_deep_analysis(self, top_n: int = 20):
         """对用户目录的 Library / Downloads / Documents 分别下探分析"""
@@ -787,7 +824,8 @@ def main():
             args.big_files = True
         else:
             # 默认执行全部（用户不选择，或者选择1）
-            args.apps = True
+            args.apps = True            
+
 
     # --home 优先设置路径
     if getattr(args, 'home', False):
