@@ -154,20 +154,48 @@ class SpaceAnalyzer:
         return f"{bytes_value:.1f} PB"
     
     def get_directory_size(self, path: str) -> int:
-        """递归计算目录大小"""
-        total_size = 0
+        """高性能计算目录大小。
+
+        优先使用 macOS 的 du -sk（以 KiB 为单位，速度快，原生命令可处理边界情况），
+        若 du 调用失败则回退到基于 os.scandir 的非递归遍历实现（避免 os.walk 的函数调用开销）。
+        """
+        # 优先尝试 du -sk（BSD du 在 macOS 可用）。
         try:
-            for dirpath, dirnames, filenames in os.walk(path):
-                for filename in filenames:
-                    filepath = os.path.join(dirpath, filename)
-                    try:
-                        total_size += os.path.getsize(filepath)
-                    except (OSError, FileNotFoundError):
-                        # 跳过无法访问的文件
-                        continue
-        except (OSError, PermissionError):
-            # 跳过无法访问的目录
+            # du 输出形如: "<kib>\t<path>\n"
+            result = subprocess.run([
+                'du', '-sk', path
+            ], capture_output=True, text=True, check=True)
+            out = result.stdout.strip().split('\t', 1)[0].strip()
+            kib = int(out)
+            return kib * 1024
+        except Exception:
+            # du 不可用或失败时回退到 Python 实现
             pass
+
+        total_size = 0
+        # 基于栈的迭代遍历，避免递归栈与 os.walk 的额外开销
+        stack = [path]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        # 跳过符号链接，避免循环与跨文件系统问题
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            if entry.is_file(follow_symlinks=False):
+                                try:
+                                    total_size += entry.stat(follow_symlinks=False).st_size
+                                except (OSError, FileNotFoundError, PermissionError):
+                                    continue
+                            elif entry.is_dir(follow_symlinks=False):
+                                stack.append(entry.path)
+                        except (OSError, FileNotFoundError, PermissionError):
+                            continue
+            except (OSError, FileNotFoundError, PermissionError):
+                # 无法进入该目录则跳过
+                continue
         return total_size
 
     def analyze_largest_files(self, root_path: str = "/", top_n: int = 50,
@@ -241,6 +269,14 @@ class SpaceAnalyzer:
                     return [(e["path"], int(e["size"])) for e in cached["entries"]][:top_n]
 
         print("正在分析目录大小，这可能需要一些时间...")
+
+        # 忽略的目录列表, 这些目录时系统目录，不需要分析
+        ignore_dir_list = [
+            "/System",  # 系统目录
+            "/Volumes", # 外部挂载卷
+            "/private", # 私有目录
+        ]
+
         
         directory_sizes = []
         
@@ -251,6 +287,9 @@ class SpaceAnalyzer:
                 
                 # 跳过隐藏文件和系统文件
                 if item.startswith('.') and item not in ['.Trash', '.localized']:
+                    continue
+
+                if item_path in ignore_dir_list:
                     continue
                 
                 if os.path.isdir(item_path):
@@ -284,19 +323,58 @@ class SpaceAnalyzer:
             return []
     
     def get_system_info(self) -> Dict:
-        """获取系统信息"""
+        """获取系统信息（包括 CPU、内存、GPU、硬盘等硬件信息）"""
+        system_info = {}
+        
         try:
-            # 获取系统版本
+            # 获取系统版本信息
             result = subprocess.run(['sw_vers'], capture_output=True, text=True)
-            system_info = {}
             for line in result.stdout.split('\n'):
                 if ':' in line:
                     key, value = line.split(':', 1)
                     system_info[key.strip()] = value.strip()
-            
-            return system_info
         except Exception:
-            return {"ProductName": "macOS", "ProductVersion": "未知"}
+            system_info["ProductName"] = "macOS"
+            system_info["ProductVersion"] = "未知"
+        
+        try:
+            # 获取 CPU 信息
+            cpu_result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], 
+                                     capture_output=True, text=True)
+            if cpu_result.returncode == 0:
+                system_info["CPU"] = cpu_result.stdout.strip()
+            
+            # 获取 CPU 核心数
+            cores_result = subprocess.run(['sysctl', '-n', 'hw.ncpu'], 
+                                        capture_output=True, text=True)
+            if cores_result.returncode == 0:
+                system_info["CPU核心数"] = cores_result.stdout.strip()
+                
+        except Exception:
+            system_info["CPU"] = "未知"
+            system_info["CPU核心数"] = "未知"
+        
+        try:
+            # 获取内存信息
+            mem_result = subprocess.run(['sysctl', '-n', 'hw.memsize'], 
+                                     capture_output=True, text=True)
+            if mem_result.returncode == 0:
+                mem_bytes = int(mem_result.stdout.strip())
+                system_info["内存"] = self.format_bytes(mem_bytes)
+        except Exception:
+            system_info["内存"] = "未知"
+                
+        
+        try:
+            # 获取启动时间
+            boot_result = subprocess.run(['uptime'], capture_output=True, text=True)
+            if boot_result.returncode == 0:
+                uptime_line = boot_result.stdout.strip()
+                system_info["运行时间"] = uptime_line
+        except Exception:
+            system_info["运行时间"] = "未知"
+        
+        return system_info
 
 
 class SpaceCli:
@@ -614,12 +692,12 @@ class SpaceCli:
         print(f"建议: \033[36m{message}\033[0m")
         print()
     
-    def print_largest_directories(self, path: str = "/", top_n: int = 20):
+    def print_largest_directories(self, path: str = "/Library", top_n: int = 20):
         """打印占用空间最大的目录"""
         print("=" * 60)
         print("📊 占用空间最大的目录")
         print("=" * 60)
-
+        
         # 若有缓存：直接显示缓存，然后再询问是否重新分析
         if self.args.use_index:
             cached = self.index.get(path)
@@ -635,6 +713,8 @@ class SpaceCli:
                     except EOFError:
                         ans = ""
                     if ans not in ("y", "yes"):
+                        # 提供下探分析选项
+                        self._offer_drill_down_analysis(cached_entries, path)
                         return
                 else:
                     return
@@ -655,6 +735,56 @@ class SpaceCli:
         total_bytes = total_info['total'] if total_info else 1
         print("\n已重新分析，最新结果：\n")
         self._render_dirs(directories, total_bytes)
+        
+        # 提供下探分析选项
+        self._offer_drill_down_analysis(directories, path)
+
+    def _offer_drill_down_analysis(self, directories: List[Tuple[str, int]], current_path: str) -> None:
+        """提供交互式下探分析选项"""
+        if not sys.stdin.isatty() or getattr(self.args, 'no_prompt', False):
+            return
+        
+        print("\n" + "=" * 60)
+        print("🔍 下探分析选项")
+        print("=" * 60)
+        print("选择序号进行深度分析，选择0返回上一级，直接回车退出:")
+        
+        try:
+            choice = input("请输入选择 [回车=退出]: ").strip()
+        except EOFError:
+            return
+        
+        if not choice:
+            return
+        
+        try:
+            idx = int(choice)
+        except ValueError:
+            print("❌ 无效的输入（应为数字序号）")
+            return
+        
+        if idx == 0:
+            # 返回上一级
+            parent_path = os.path.dirname(current_path.rstrip('/'))
+            if parent_path != current_path and parent_path != '/':
+                print(f"\n🔄 返回上一级: {parent_path}")
+                self.print_largest_directories(parent_path, self.args.top_n)
+            else:
+                print("❌ 已在根目录，无法返回上一级")
+            return
+        
+        if idx < 1 or idx > len(directories):
+            print("❌ 序号超出范围")
+            return
+        
+        selected_path, selected_size = directories[idx - 1]
+        size_str = self.analyzer.format_bytes(selected_size)
+        
+        print(f"\n🔍 正在分析: {selected_path} ({size_str})")
+        print("=" * 60)
+        
+        # 递归调用下探分析
+        self.print_largest_directories(selected_path, self.args.top_n)
 
     def print_app_analysis(self, top_n: int = 20):
         """打印应用目录占用分析，并给出卸载建议"""
@@ -765,7 +895,7 @@ class SpaceCli:
         system_info = self.analyzer.get_system_info()
         
         for key, value in system_info.items():
-            print(f"{key}: {value}")
+            print(f"{key}: \033[36m{value}\033[0m")
         print()
     
     def export_report(self, output_file: str, path: str = "/"):
@@ -964,13 +1094,13 @@ def main():
         print("🧭 SpaceCli 菜单（直接回车 = 执行全部项目）")
         print("=" * 60)
         home_path = str(Path.home())
-        print("1) \033[36m执行全部项目（系统信息 + 健康 + 目录 + 应用）\033[0m")
+        print("1) \033[36m执行主要项目（系统信息 + 健康 +  应用）\033[0m")
         print(f"2) \033[36m当前用户目录分析（路径: {home_path}）\033[0m")
         print("3) \033[36m仅显示系统信息\033[0m")
         print("4) \033[36m仅显示磁盘健康状态\033[0m")
-        print("5) \033[36m仅显示最大目录列表\033[0m")
-        print("6) \033[36m仅显示应用目录分析与建议\033[0m")
-        print("7) \033[36m仅显示大文件分析\033[0m")
+        print("5) \033[36m交互式目录空间分析\033[0m")
+        print("6) \033[36m仅分析程序应用目录空间\033[0m")
+        print("7) \033[36m仅进行大文件分析（很耗时，可随时终止）\033[0m")
         print("0) \033[36m退出\033[0m")
         try:
             choice = input("请选择 [回车=1]: ").strip()
@@ -985,27 +1115,34 @@ def main():
             args.health_only = False
             args.directories_only = False
         elif choice == "3": # 仅显示系统信息
+            args.health_only = False
+            args.directories_only = False
+            args.apps = False
+            args.big_files = False
+        elif choice == "4": # 仅显示磁盘健康状态 
             args.health_only = True
             args.directories_only = False
             args.apps = False
-        elif choice == "4": # 仅显示磁盘健康状态 
+            args.big_files = False
+        elif choice == "5": # 仅显示最大目录列表
             args.health_only = False
             args.directories_only = True
             args.apps = False
-        elif choice == "5": # 仅显示最大目录列表
-            args.health_only = False
-            args.directories_only = False
-            args.apps = False
+            args.big_files = False
         elif choice == "6": # 仅显示应用目录分析与建议
             args.health_only = False
             args.directories_only = False
             args.apps = True
+            args.big_files = False
         elif choice == "7": # 仅显示大文件分析
             args.health_only = False
-            args.directories_only = True
+            args.directories_only = False
             args.apps = False
             args.big_files = True
         else: # 默认执行全部（用户不选择，或者选择1）            
+            args.health_only = True
+            args.directories_only = False
+            args.big_files = False
             args.apps = True            
 
 
@@ -1025,15 +1162,14 @@ def main():
     
     try:
         # 显示系统信息
-        if not args.directories_only:
-            space_cli.print_system_info()
+        space_cli.print_system_info()
         
         # 显示磁盘健康状态
-        if not args.directories_only:
+        if args.health_only:
             space_cli.print_disk_health(args.path)
         
         # 显示目录分析
-        if not args.health_only:
+        if args.directories_only or args.path !='/':
             space_cli.print_largest_directories(args.path, args.top_n)
             # 若分析路径为当前用户目录，做深度分析
             if os.path.abspath(args.path) == os.path.abspath(str(Path.home())):
@@ -1044,7 +1180,8 @@ def main():
             space_cli.print_app_analysis(args.top_n)
 
         # 大文件分析
-        if getattr(args, 'big_files', False):
+        #if getattr(args, 'big_files', False):
+        if args.big_files:
             space_cli.print_big_files(args.path, top_n=args.big_files_top, min_size_bytes=args.big_files_min_bytes)
         
         # 导出报告
