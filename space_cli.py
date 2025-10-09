@@ -182,7 +182,7 @@ class SpaceAnalyzer:
                 dirpath_display = dirpath[-80:] # 截取最后50个字符
                 if dirpath_display == "":
                     dirpath_display = dirpath
-                sys.stdout.write(f"\r-> 正在读取: \033[36m{dirpath_display}\033[0m")
+                sys.stdout.write(f"\r\033[K-> 正在读取: \033[36m{dirpath_display}\033[0m")
                 sys.stdout.flush()
                 for filename in filenames:
                     filepath = os.path.join(dirpath, filename)
@@ -203,7 +203,7 @@ class SpaceAnalyzer:
                         if dirpath_display == "":
                             dirpath_display = dirpath
                         # 间隔性进度输出（单行覆盖）
-                        sys.stdout.write(f"\r-> 正在读取: \033[36m{dirpath_display}\033[0m    已扫描文件数: \033[32m{scanned}\033[0m")
+                        sys.stdout.write(f"\r\033[K-> 正在读取: \033[36m{dirpath_display}\033[0m    已扫描文件数: \033[32m{scanned}\033[0m")
                         sys.stdout.flush()
         except KeyboardInterrupt:
             print("\n用户中断扫描，返回当前结果...")
@@ -256,7 +256,7 @@ class SpaceAnalyzer:
                 if os.path.isdir(item_path):
                     try:
                         # 进度提示：当前正在读取的目录（单行覆盖）
-                        sys.stdout.write(f"\r-> 正在读取: \033[36m{item_path}\033[0m")
+                        sys.stdout.write(f"\r\033[K-> 正在读取: \033[36m{item_path}\033[0m")
                         sys.stdout.flush()
                         size = self.get_directory_size(item_path)
                         directory_sizes.append((item_path, size))
@@ -311,11 +311,188 @@ class SpaceCli:
         os.makedirs(app_cache_dir, exist_ok=True)
         self.app_index = IndexStore(index_file=os.path.join(app_cache_dir, "apps.json"))
 
+    # —— 应用删除相关 ——
+    def _candidate_app_paths(self, app_name: str) -> List[str]:
+        """根据应用名推导可能占用空间的相关目录/文件路径列表。"""
+        home = str(Path.home())
+        candidates: List[str] = []
+        possible_bases = [
+            ("/Applications", f"{app_name}.app"),
+            (os.path.join(home, "Applications"), f"{app_name}.app"),
+            ("/Library/Application Support", app_name),
+            (os.path.join(home, "Library", "Application Support"), app_name),
+            ("/Library/Caches", app_name),
+            (os.path.join(home, "Library", "Caches"), app_name),
+            ("/Library/Logs", app_name),
+            (os.path.join(home, "Library", "Logs"), app_name),
+            (os.path.join(home, "Library", "Containers"), app_name),
+        ]
+        # 直接拼接命中
+        for base, tail in possible_bases:
+            path = os.path.join(base, tail)
+            if os.path.exists(path):
+                candidates.append(path)
+        # 模糊扫描：包含应用名的目录
+        scan_dirs = [
+            "/Applications",
+            os.path.join(home, "Applications"),
+            "/Library/Application Support",
+            os.path.join(home, "Library", "Application Support"),
+            "/Library/Caches",
+            os.path.join(home, "Library", "Caches"),
+            "/Library/Logs",
+            os.path.join(home, "Library", "Logs"),
+            os.path.join(home, "Library", "Containers"),
+        ]
+        app_lower = app_name.lower()
+        for base in scan_dirs:
+            if not os.path.exists(base):
+                continue
+            try:
+                for item in os.listdir(base):
+                    item_path = os.path.join(base, item)
+                    # 只收集目录或 .app 包
+                    if not os.path.isdir(item_path):
+                        continue
+                    name_lower = item.lower()
+                    if app_lower in name_lower:
+                        candidates.append(item_path)
+            except (PermissionError, OSError):
+                continue
+        # 去重并按路径长度降序（先删更深层，避免空目录残留）
+        uniq: List[str] = []
+        seen = set()
+        for p in sorted(set(candidates), key=lambda x: len(x), reverse=True):
+            if p not in seen:
+                uniq.append(p)
+                seen.add(p)
+        return uniq
+
+    def _delete_paths_and_sum(self, paths: List[str]) -> Tuple[int, List[Tuple[str, str]]]:
+        """删除给定路径列表，返回释放的总字节数与失败列表(路径, 原因)。"""
+        total_freed = 0
+        failures: List[Tuple[str, str]] = []
+        
+        def _try_fix_permissions(path: str) -> None:
+            """尝试修复权限与不可变标记以便删除。"""
+            try:
+                # 去除不可变标记（普通用户能去除的场景）
+                subprocess.run(["chflags", "-R", "nouchg", path], capture_output=True)
+            except Exception:
+                pass
+            try:
+                os.chmod(path, 0o777)
+            except Exception:
+                pass
+
+        def _onerror(func, path, exc_info):
+            # 当 rmtree 无法删除时，尝试修复权限并重试一次
+            _try_fix_permissions(path)
+            try:
+                func(path)
+            except Exception:
+                # 让上层捕获
+                raise
+        for p in paths:
+            try:
+                size_before = 0
+                try:
+                    if os.path.isdir(p):
+                        size_before = self.analyzer.get_directory_size(p)
+                    elif os.path.isfile(p):
+                        size_before = os.path.getsize(p)
+                except Exception:
+                    size_before = 0
+                if os.path.isdir(p) and not os.path.islink(p):
+                    try:
+                        shutil.rmtree(p, ignore_errors=False, onerror=_onerror)
+                    except Exception:
+                        # 目录删除失败，降级为逐项尝试删除（尽量清理可删部分）
+                        for dirpath, dirnames, filenames in os.walk(p, topdown=False):
+                            for name in filenames:
+                                fpath = os.path.join(dirpath, name)
+                                try:
+                                    _try_fix_permissions(fpath)
+                                    os.remove(fpath)
+                                except Exception:
+                                    continue
+                            for name in dirnames:
+                                dpath = os.path.join(dirpath, name)
+                                try:
+                                    _try_fix_permissions(dpath)
+                                    os.rmdir(dpath)
+                                except Exception:
+                                    continue
+                        # 最后尝试删除顶层目录
+                        _try_fix_permissions(p)
+                        os.rmdir(p)
+                else:
+                    os.remove(p)
+                total_freed += size_before
+            except Exception as e:
+                failures.append((p, str(e)))
+        return total_freed, failures
+
+    def _offer_app_delete(self, apps: List[Tuple[str, int]]) -> None:
+        """在已打印的应用列表后，提供按序号一键删除功能。"""
+        if not sys.stdin.isatty() or getattr(self.args, 'no_prompt', False):
+            return
+        try:
+            ans = input("是否要一键删除某个应用？输入序号或回车跳过: ").strip()
+        except EOFError:
+            ans = ""
+        if not ans:
+            return
+        try:
+            idx = int(ans)
+        except ValueError:
+            print("❌ 无效的输入（应为数字序号）")
+            return
+        if idx < 1 or idx > len(apps):
+            print("❌ 序号超出范围")
+            return
+        app_name, app_size = apps[idx - 1]
+        size_str = self.analyzer.format_bytes(app_size)
+        try:
+            confirm = input(f"确认删除应用及相关缓存: {app_name} (约 {size_str})？[y/N]: ").strip().lower()
+        except EOFError:
+            confirm = ""
+        if confirm not in ("y", "yes"):
+            print("已取消删除")
+            return
+        related_paths = self._candidate_app_paths(app_name)
+        if not related_paths:
+            print("未找到可删除的相关目录/文件")
+            return
+        print("将尝试删除以下路径：")
+        for p in related_paths:
+            print(f" - {p}")
+        try:
+            confirm2 = input("再次确认删除以上路径？[y/N]: ").strip().lower()
+        except EOFError:
+            confirm2 = ""
+        if confirm2 not in ("y", "yes"):
+            print("已取消删除")
+            return
+        freed, failures = self._delete_paths_and_sum(related_paths)
+        print(f"✅ 删除完成，预计释放空间: {self.analyzer.format_bytes(freed)}")
+        if failures:
+            print("以下路径删除失败，可能需要手动或管理员权限：")
+            for p, reason in failures:
+                print(f" - {p}  ->  {reason}")
+            # 常见提示：Operation not permitted（SIP/容器元数据等）
+            if any("Operation not permitted" in r for _, r in failures):
+                print("提示：部分系统受保护或容器元数据文件无法删除。可尝试：")
+                print(" - 先退出相关应用（如 Docker）再重试")
+                print(" - 给予当前终端“完全磁盘访问权限”（系统设置 → 隐私与安全性）")
+                print(" - 仅删除用户目录下缓存，保留系统级容器元数据")
+
     # 通用渲染：目录与应用（减少重复）
     def _render_dirs(self, entries: List[Tuple[str, int]], total_bytes: int) -> None:
         for i, (dir_path, size) in enumerate(entries, 1):
             size_str = self.analyzer.format_bytes(size)
             percentage = (size / total_bytes) * 100 if total_bytes else 0
+            # 1G 以上红色，否则绿色
             color = "\033[31m" if size >= 1024**3 else "\033[32m"
             print(f"{i:2d}. \033[36m{dir_path}\033[0m --    大小: {color}{size_str}\033[0m (\033[33m{percentage:.2f}%\033[0m)")
 
@@ -324,7 +501,8 @@ class SpaceCli:
             size_str = self.analyzer.format_bytes(size)
             pct = (size / disk_total) * 100 if disk_total else 0
             suggestion = "建议卸载或清理缓存" if size >= 5 * 1024**3 else "可保留，定期清理缓存"
-            color = "\033[31m" if size >= 5 * 1024**3 else "\033[32m"
+            # 3G 以上红色，否则绿色
+            color = "\033[31m" if size >= 3 * 1024**3 else "\033[32m"
             print(f"{i:2d}. \033[36m{app}\033[0m  --  占用: {color}{size_str}\033[0m ({pct:.2f}%)  — {suggestion}")
 
     def analyze_app_directories(self, top_n: int = 20,
@@ -385,7 +563,8 @@ class SpaceCli:
                         continue
                     key = app_key_from_path(item_path)
                     # 进度提示：当前应用相关目录（单行覆盖）
-                    sys.stdout.write(f"\r-> 正在读取: {item_path}")
+                    item_path = item_path[:100]
+                    sys.stdout.write(f"\r\033[K-> 正在读取: \033[36m{item_path}\033[0m")
                     sys.stdout.flush()
                     size = self.analyzer.get_directory_size(item_path)
                     scanned_dirs.append(item_path)
@@ -492,6 +671,8 @@ class SpaceCli:
                 disk_total = total['total'] if total else 1
                 print(f"(来自索引) 显示前 {min(len(cached_entries), top_n)} 个空间占用最高的应用:\n")
                 self._render_apps(cached_entries, disk_total)
+                # 提供一键删除
+                self._offer_app_delete(cached_entries)
                 if sys.stdin.isatty() and not self.args.no_prompt:
                     try:
                         ans = input("是否重新分析应用以刷新索引？[y/N]: ").strip().lower()
@@ -517,6 +698,8 @@ class SpaceCli:
         disk_total = total['total'] if total else 1
         print("\n已重新分析，最新应用占用结果：\n")
         self._render_apps(apps, disk_total)
+        # 提供一键删除
+        self._offer_app_delete(apps)
 
     def print_home_deep_analysis(self, top_n: int = 20):
         """对用户目录的 Library / Downloads / Documents 分别下探分析"""
@@ -794,36 +977,35 @@ def main():
         except EOFError:
             choice = ""
 
-        if choice == "0":
+        if choice == "0": # 退出
             sys.exit(0)
-        elif choice == "2":
+        elif choice == "2": # 仅显示当前用户目录分析
             args.path = home_path
             args.apps = False
             args.health_only = False
             args.directories_only = False
-        elif choice == "3":
+        elif choice == "3": # 仅显示系统信息
             args.health_only = True
             args.directories_only = False
             args.apps = False
-        elif choice == "4":
+        elif choice == "4": # 仅显示磁盘健康状态 
             args.health_only = False
             args.directories_only = True
             args.apps = False
-        elif choice == "5":
+        elif choice == "5": # 仅显示最大目录列表
             args.health_only = False
             args.directories_only = False
             args.apps = False
-        elif choice == "6":
+        elif choice == "6": # 仅显示应用目录分析与建议
             args.health_only = False
-            args.directories_only = True
+            args.directories_only = False
             args.apps = True
-        elif choice == "7":
+        elif choice == "7": # 仅显示大文件分析
             args.health_only = False
             args.directories_only = True
             args.apps = False
             args.big_files = True
-        else:
-            # 默认执行全部（用户不选择，或者选择1）
+        else: # 默认执行全部（用户不选择，或者选择1）            
             args.apps = True            
 
 
