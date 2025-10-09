@@ -39,12 +39,11 @@ space-cli
 
 # 或以模块方式
 python3 -m space_cli
-```
 
 # 如果要使用高级的功能，请使用更复杂的命令行参数，可以运行help
 space-cli --help
 
-
+```
 
 ### 方法2：直接使用
 
